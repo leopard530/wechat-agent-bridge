@@ -24,7 +24,6 @@
 - **多会话支持** — 每个微信用户可拥有多个独立 AI 会话，自由切换
 - **自动容灾** — 指数退避重试、心跳监控、自动重连，无需手动干预
 - **扫码即用** — 首次扫码登录后凭据缓存，后续启动免扫码
-- **PM2 就绪** — 生产级进程管理，支持崩溃自动重启
 - **可扩展架构** — 抽象 AI 后端接口，支持多 AI 提供商接入
 
 ---
@@ -71,8 +70,8 @@ npm run build
 ### 启动 / Run
 
 ```bash
-npm run dev         # 前台运行，支持热重载
-npm run pm2:start   # 后台运行，PM2 管理（生产环境推荐）
+npm run dev   # 开发调试，支持热重载
+npm start     # 生产运行（需先 npm run build）
 ```
 
 首次启动会打印扫码链接，用微信扫描即可登录。凭据缓存在 `data/wechat/` 下，后续无需重复扫码。
@@ -131,7 +130,7 @@ Bridge 内置多层容灾机制，**无需手动干预**：
 - **自动重连** — AI 进程异常退出后自动重拉，间隔逐步增加（5s → 10s → 20s → … → 最多 5 分钟）
 - **消息排队** — 重连期间微信消息排队等待，恢复后继续处理
 
-无论是 `npm run dev`、`node dist/index.js` 还是 PM2 启动，均适用。PM2 额外提供进程级守护，双重保险。
+无论是 `npm run dev` 还是 `npm start` 启动，均自动容灾恢复。
 
 ---
 
@@ -160,21 +159,7 @@ cd wechat-agent-bridge
 npm install
 cp .env.example .env   # 按需编辑
 npm run build
-npm run pm2:start
-```
-
-### 开机自启
-
-```bash
-npx pm2 save        # 保存当前进程列表快照
-npx pm2 startup     # 生成开机启动脚本（按提示执行输出的命令）
-```
-
-### 验证部署
-
-```bash
-npm run pm2:status   # 应显示 "online"
-npm run pm2:logs     # 确认无启动报错
+npm start
 ```
 
 ### 更新
@@ -183,7 +168,7 @@ npm run pm2:logs     # 确认无启动报错
 git pull
 npm install           # 如有新依赖
 npm run build
-npm run pm2:restart
+# 重启进程即可
 ```
 
 ---
@@ -204,7 +189,6 @@ npm run test:watch    # 监听模式
 | [TypeScript](https://www.typescriptlang.org/) | 类型安全的 JavaScript |
 | [OpenCode SDK](https://github.com/opencode-ai/sdk) | AI Agent 通信 |
 | [@pinixai/weixin-bot](https://www.npmjs.com/package/@pinixai/weixin-bot) | 微信 iLink 协议客户端 |
-| [PM2](https://pm2.keymetrics.io/) | 生产级进程管理 |
 | [Vitest](https://vitest.dev/) | 单元测试框架 |
 
 ---
