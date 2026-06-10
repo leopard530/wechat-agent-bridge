@@ -9,183 +9,206 @@
 
 # wechat-agent-bridge
 
-> Bridge your personal WeChat to AI coding assistants — chat with OpenCode (and soon Claude Code) directly from WeChat.
+> 通过微信直接与 AI 编程助手对话 —— 支持 OpenCode（即将支持 Claude Code）。<br>
+> Chat with AI coding assistants directly from WeChat — OpenCode (Claude Code coming soon).
 
 ```
- 👤 WeChat Message  →  🌉 Bridge  →  🤖 AI Agent  →  📲 WeChat Response
+ 👤 微信消息  →  🌉 Bridge  →  🤖 AI Agent  →  📲 微信回复
 ```
 
-## ✨ Features
+---
 
-- **WeChat-native** — send messages, approve/deny actions, manage sessions, all inside WeChat
-- **Multi-session** — each WeChat user gets independent AI sessions, switch between them freely
-- **Auto-recovery** — exponential backoff retry, health monitoring, and automatic reconnection
-- **Zero-config login** — scan QR code once, token cached for subsequent launches
-- **PM2-ready** — production-grade process management with auto-restart
-- **Extensible** — abstracted AI backend interface, ready for multi-provider support
+## ✨ 功能亮点 / Features
 
-## 📦 Architecture
+- **微信原生** — 发消息、批准/拒绝操作、管理会话，全在微信内完成
+- **多会话支持** — 每个微信用户可拥有多个独立 AI 会话，自由切换
+- **自动容灾** — 指数退避重试、心跳监控、自动重连，无需手动干预
+- **扫码即用** — 首次扫码登录后凭据缓存，后续启动免扫码
+- **PM2 就绪** — 生产级进程管理，支持崩溃自动重启
+- **可扩展架构** — 抽象 AI 后端接口，支持多 AI 提供商接入
+
+---
+
+## 📦 架构 / Architecture
 
 ```
-WeChat User  ←→  iLink (ilinkai.weixin.qq.com)
-                         │
-                  @pinixai/weixin-bot
-                         │
-              bridge/orchestrator  ← command parsing + formatting
-                         │
-                  @opencode-ai/sdk
-                         │
-                     OpenCode AI
+微信用户  ←→  iLink (ilinkai.weixin.qq.com)
+                       │
+                @pinixai/weixin-bot
+                       │
+            bridge/orchestrator  ← 命令解析 + 格式化
+                       │
+                @opencode-ai/sdk
+                       │
+                   OpenCode AI
 ```
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## 🚀 快速开始 / Quick Start
+
+### 环境要求 / Prerequisites
 
 - **Node.js** >= 20
-- **OpenCode CLI** installed and available in PATH
+- **OpenCode CLI** 已安装并在 PATH 中
 
-### Setup
+### 安装 / Setup
 
 ```bash
-git clone https://github.com/your-username/wechat-agent-bridge.git
+git clone https://github.com/leopard530/wechat-agent-bridge.git
 cd wechat-agent-bridge
 
-# install dependencies
+# 安装依赖
 npm install
 
-# configure environment (optional — defaults are sensible)
+# 配置环境变量（可选，默认值即可运行）
 cp .env.example .env
 
-# build
+# 构建
 npm run build
 ```
 
-### Run
+### 启动 / Run
 
 ```bash
-npm run dev         # foreground, with hot reload
-npm run pm2:start   # background, managed by PM2 (recommended for production)
+npm run dev         # 前台运行，支持热重载
+npm run pm2:start   # 后台运行，PM2 管理（生产环境推荐）
 ```
 
-On first launch, a QR code URL is printed — scan it with WeChat to log in. Tokens are cached under `data/wechat/`, so subsequent launches skip the scan.
+首次启动会打印扫码链接，用微信扫描即可登录。凭据缓存在 `data/wechat/` 下，后续无需重复扫码。
 
-Send `/status` in WeChat to verify the bridge is connected and healthy.
+在微信中发送 `/status` 即可确认 Bridge 连接正常。
 
-## 🎮 Commands
+---
 
-### Sessions
+## 🎮 命令参考 / Commands
 
-| Command | Description |
+### 会话 / Sessions
+
+| 命令 | 说明 |
 |---------|-------------|
-| `/new` | Start a new AI session |
-| `/sessions` | List all active sessions |
-| `/session <n>` | Switch to session `n` |
-| `/undo` | Undo the last operation |
-| `/redo` | Redo a previously undone operation |
-| `/abort` | Cancel the current in-progress task |
+| `/new` | 创建新的 AI 会话 |
+| `/sessions` | 列出所有活跃会话 |
+| `/session <n>` | 切换到第 n 号会话 |
+| `/undo` | 撤销上一步操作 |
+| `/redo` | 重做已撤销的操作 |
+| `/abort` | 中断当前正在执行的任务 |
 
-### Models
+### 模型 / Models
 
-| Command | Description |
+| 命令 | 说明 |
 |---------|-------------|
-| `/models` | List available AI models |
-| `/model` | Show the currently selected model |
-| `/model <n>` | Switch to model `n` |
+| `/models` | 列出可用 AI 模型 |
+| `/model` | 查看当前使用的模型 |
+| `/model <n>` | 切换到第 n 号模型 |
 
-### Files & Navigation
+### 文件与目录 / Files & Navigation
 
-| Command | Description |
+| 命令 | 说明 |
 |---------|-------------|
-| `/cd <path>` | Change the working directory on the host |
-| `/send <path>` | Send a local file from the host to WeChat |
+| `/cd <路径>` | 切换主机工作目录 |
+| `/send <路径>` | 将主机上的文件发送到微信 |
 
-### Control
+### 控制 / Control
 
-| Command | Description |
+| 命令 | 说明 |
 |---------|-------------|
-| `/approve` `/a` | Approve a pending operation |
-| `/deny` `/d` | Deny a pending operation |
-| `/status` | Show bridge and connection status |
-| `/help` `/h` | Show this help message |
+| `/approve` `/a` | 批准待确认操作 |
+| `/deny` `/d` | 拒绝待确认操作 |
+| `/status` | 查看 Bridge 和连接状态 |
+| `/help` `/h` | 显示此帮助信息 |
 
-Anything else you type is forwarded directly to the AI as a conversation message.
+直接发送文字内容即为 AI 对话消息。
 
-## 🔄 Connection Recovery
+---
 
-The bridge includes multiple layers of resilience — **no manual intervention needed**:
+## 🔄 连接恢复 / Connection Recovery
 
-- **API Retry** — all OpenCode calls retry with exponential backoff (1s → 2s → 4s → … → 30s)
-- **Health Monitoring** — heartbeat every 30s; 3 consecutive failures trigger automatic recovery
-- **Auto-Reconnect** — crashed AI processes are restarted with increasing intervals (5s → 10s → 20s → … → 5min max), never giving up
-- **Message Queuing** — WeChat messages are queued during reconnection and processed once recovered
+Bridge 内置多层容灾机制，**无需手动干预**：
 
-This works regardless of how you launch: `npm run dev`, `node dist/index.js`, or PM2. PM2 adds an extra layer of process-level supervision for double protection.
+- **API 重试** — 所有 OpenCode 调用均采用指数退避重试（1s → 2s → 4s → … → 30s）
+- **健康监控** — 每 30 秒心跳检测，连续 3 次失败触发自动恢复
+- **自动重连** — AI 进程异常退出后自动重拉，间隔逐步增加（5s → 10s → 20s → … → 最多 5 分钟）
+- **消息排队** — 重连期间微信消息排队等待，恢复后继续处理
 
-## ⚙️ Configuration
+无论是 `npm run dev`、`node dist/index.js` 还是 PM2 启动，均适用。PM2 额外提供进程级守护，双重保险。
 
-Configuration is loaded from environment variables (via `.env` or the system environment).
+---
 
-| Variable | Default | Description |
+## ⚙️ 配置 / Configuration
+
+通过环境变量配置（支持 `.env` 文件或系统环境变量）。
+
+| 变量 | 默认值 | 说明 |
 |----------|---------|-------------|
-| `OPENCODE_HOST` | `127.0.0.1` | OpenCode server host |
-| `OPENCODE_PORT` | `4096` | OpenCode server port |
-| `OPENCODE_MODEL` | — | Default model, e.g. `anthropic/claude-sonnet-4` |
-| `WECHAT_DATA_DIR` | `./data/wechat` | WeChat credential storage path |
-| `SESSION_STORE_PATH` | `./data/sessions.json` | Session persistence file |
-| `LOG_LEVEL` | `info` | Logging level |
+| `OPENCODE_HOST` | `127.0.0.1` | OpenCode 服务地址 |
+| `OPENCODE_PORT` | `4096` | OpenCode 服务端口 |
+| `OPENCODE_MODEL` | — | 默认模型，如 `anthropic/claude-sonnet-4` |
+| `WECHAT_DATA_DIR` | `./data/wechat` | 微信凭据存储路径 |
+| `SESSION_STORE_PATH` | `./data/sessions.json` | 会话持久化文件 |
+| `LOG_LEVEL` | `info` | 日志级别 |
 
-## 🚢 Deployment
+---
 
-### Personal Machine / Dev Server
+## 🚢 部署 / Deployment
+
+### 开发机 / 个人电脑
 
 ```bash
-git clone https://github.com/your-username/wechat-agent-bridge.git
+git clone https://github.com/leopard530/wechat-agent-bridge.git
 cd wechat-agent-bridge
 npm install
-cp .env.example .env   # edit as needed
+cp .env.example .env   # 按需编辑
 npm run build
 npm run pm2:start
 ```
 
-### Persist Across Reboots
+### 开机自启
 
 ```bash
-npx pm2 save        # snapshot the current process list
-npx pm2 startup     # generate a startup script (follow the printed instructions)
+npx pm2 save        # 保存当前进程列表快照
+npx pm2 startup     # 生成开机启动脚本（按提示执行输出的命令）
 ```
 
-### Verify
+### 验证部署
 
 ```bash
-npm run pm2:status   # should show "online"
-npm run pm2:logs     # confirm no startup errors
+npm run pm2:status   # 应显示 "online"
+npm run pm2:logs     # 确认无启动报错
 ```
 
-### Update
+### 更新
 
 ```bash
 git pull
-npm install           # if new dependencies were added
+npm install           # 如有新依赖
 npm run build
 npm run pm2:restart
 ```
 
-## 🧪 Development
+---
+
+## 🧪 开发 / Development
 
 ```bash
-npm test              # run all tests
-npm run test:watch    # watch mode
+npm test              # 运行全部测试
+npm run test:watch    # 监听模式
 ```
 
-## 🛠 Tech Stack
+---
 
-- **[TypeScript](https://www.typescriptlang.org/)** — type-safe JavaScript
-- **[OpenCode SDK](https://github.com/opencode-ai/sdk)** — AI agent communication
-- **[@pinixai/weixin-bot](https://www.npmjs.com/package/@pinixai/weixin-bot)** — WeChat iLink protocol client
-- **[PM2](https://pm2.keymetrics.io/)** — production process manager
-- **[Vitest](https://vitest.dev/)** — unit testing framework
+## 🛠 技术栈 / Tech Stack
 
-## 📄 License
+| 技术 | 用途 |
+|------|------|
+| [TypeScript](https://www.typescriptlang.org/) | 类型安全的 JavaScript |
+| [OpenCode SDK](https://github.com/opencode-ai/sdk) | AI Agent 通信 |
+| [@pinixai/weixin-bot](https://www.npmjs.com/package/@pinixai/weixin-bot) | 微信 iLink 协议客户端 |
+| [PM2](https://pm2.keymetrics.io/) | 生产级进程管理 |
+| [Vitest](https://vitest.dev/) | 单元测试框架 |
+
+---
+
+## 📄 许可证 / License
 
 [Apache 2.0](./LICENSE) © 2025
