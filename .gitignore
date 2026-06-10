@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/
+.env
+.omo/
+# pm2
+.pm2/
+logs/
