@@ -620,6 +620,13 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
         `[bridge] ${userId.slice(0, 12)}...: ${text.slice(0, 100)}`,
       );
 
+      // If this is the first interaction (no session yet), notify user
+      // that OpenCode is starting — this can take several seconds
+      const isFirstMessage = !store.getActiveSessionId(userId);
+      if (isFirstMessage) {
+        await wechat.reply(msg, "⏳ 正在启动 OpenCode，请稍候...");
+      }
+
       // Show typing indicator
       await wechat.sendTyping(userId);
 
