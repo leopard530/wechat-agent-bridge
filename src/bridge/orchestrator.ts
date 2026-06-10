@@ -5,6 +5,7 @@ import type { SessionStore } from "../store/session-store.js";
 import { config } from "../config.js";
 import { formatForWechat, extractLargeCodeBlocks } from "./formatter.js";
 import { stat, mkdir, writeFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -654,6 +655,10 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
 
       // Send any files OpenCode created/modified
       for (const file of result.files) {
+        if (!existsSync(file.path)) {
+          console.warn(`[bridge] Skipping non-existent file: ${file.path}`);
+          continue;
+        }
         try {
           await wechat.sendFile(userId, file.path, file.label);
           console.log(`[bridge] Sent file to ${userId.slice(0, 12)}...: ${file.path}`);

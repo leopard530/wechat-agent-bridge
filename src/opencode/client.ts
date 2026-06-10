@@ -330,7 +330,15 @@ export async function createOpenCodeService(
 
   const sendPrompt = async (wechatUserId: string, text: string): Promise<PromptResult> => {
     const sessionId = await ensureSession(wechatUserId);
-    const workDir = store.getWorkDir(wechatUserId, defaultDir);
+    let workDir = store.getWorkDir(wechatUserId, defaultDir);
+
+    // Auto-heal: if stored workDir no longer exists (project moved), fall back to default
+    if (!existsSync(workDir)) {
+      console.warn(`[opencode] Stored workDir no longer exists: ${workDir} — using ${defaultDir}`);
+      workDir = defaultDir;
+      store.setWorkDir(wechatUserId, workDir, defaultDir);
+    }
+
     store.touch(wechatUserId);
 
     const modelStr = store.getModel(wechatUserId) ?? config.opencode.model ?? undefined;
