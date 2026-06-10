@@ -69,6 +69,8 @@ export interface SessionMessage {
 export interface OpenCodeService {
   ensureSession(wechatUserId: string): Promise<string>;
   newSession(wechatUserId: string): Promise<string>;
+  /** Returns true if the user needs a new OpenCode session (e.g. after restart). */
+  needsNewSession(wechatUserId: string): boolean;
   sendPrompt(wechatUserId: string, text: string): Promise<PromptResult>;
   listModels(): Promise<ModelInfo[]>;
   listSessions(wechatUserId: string): SessionEntry | null;
@@ -218,6 +220,9 @@ export async function createOpenCodeService(
   let serverGeneration = 0;
   const validSessions = new Set<string>();
 
+  // Dedup concurrent session creation for the same user
+  const pendingSessions = new Map<string, Promise<string>>();
+
   console.log(`[opencode] Server started at ${server.url}`);
 
   // ── Health monitor ──────────────────────────────────────────
@@ -305,7 +310,18 @@ export async function createOpenCodeService(
   const ensureSession = async (wechatUserId: string): Promise<string> => {
     const existing = store.getActiveSessionId(wechatUserId);
     if (existing && validSessions.has(existing)) return existing;
-    return newSession(wechatUserId);
+
+    // Dedup: if a session is already being created for this user, wait on it
+    const pending = pendingSessions.get(wechatUserId);
+    if (pending) return pending;
+
+    const promise = newSession(wechatUserId);
+    pendingSessions.set(wechatUserId, promise);
+    try {
+      return await promise;
+    } finally {
+      pendingSessions.delete(wechatUserId);
+    }
   };
 
   const newSession = async (wechatUserId: string): Promise<string> => {
@@ -713,6 +729,11 @@ export async function createOpenCodeService(
   return {
     ensureSession,
     newSession,
+    needsNewSession: (wechatUserId: string) => {
+      const existing = store.getActiveSessionId(wechatUserId);
+      if (!existing) return true;
+      return !validSessions.has(existing);
+    },
     sendPrompt,
     listModels,
     listSessions,

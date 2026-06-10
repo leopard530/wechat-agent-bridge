@@ -116,16 +116,17 @@ export function createWeChatService(): WeChatService {
     stop: () => bot.stop(),
 
     onMessage: (handler) => {
-      bot.onMessage(async (msg) => {
+      bot.onMessage((msg) => {
         // Capture context token for media uploads
         if (msg._contextToken) {
           contextTokens.set(msg.userId, msg._contextToken);
         }
-        try {
-          await handler(msg);
-        } catch (err) {
+        // Fire and forget — don't block the message pipeline while waiting
+        // for slow operations like session creation or AI responses.
+        // Per-user concurrency is gated by the orchestrator's `active` Set.
+        handler(msg).catch((err) => {
           console.error("[wechat] Handler error:", err);
-        }
+        });
       });
     },
 
