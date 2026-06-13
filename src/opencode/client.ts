@@ -33,6 +33,14 @@ export interface AgentInfo {
   hidden?: boolean;
 }
 
+export interface PermissionRequest {
+  id: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  tool?: { messageId: string; callId: string };
+}
+
 export interface FileOutput {
   path: string;
   label: string;
@@ -98,6 +106,14 @@ export interface OpenCodeService {
   isHealthy(): Promise<boolean>;
   /** Get the model actually used in the last prompt for a user. */
   getLastUsedModel(wechatUserId: string): string | undefined;
+  /** Check for pending permission requests for a user's session. */
+  listPendingPermissions(wechatUserId: string): Promise<PermissionRequest[]>;
+  /** Approve a permission request. */
+  approvePermission(wechatUserId: string, requestId: string, always?: boolean): Promise<void>;
+  /** Deny a permission request. */
+  denyPermission(wechatUserId: string, requestId: string): Promise<void>;
+  /** Fetch session info from OpenCode (title, etc). */
+  getSessionInfo(wechatUserId: string): Promise<{ id: string; title: string }[]>;
 
   listFiles(wechatUserId: string, dirPath?: string): Promise<FileEntry[]>;
   readFile(wechatUserId: string, filePath: string): Promise<FileContentResult>;
@@ -429,7 +445,8 @@ export async function createOpenCodeService(
     const sessionId = result.data?.id;
     if (!sessionId) throw new Error("Session create returned no ID");
     validSessions.add(sessionId);
-    store.addSession(wechatUserId, sessionId, `会话 ${count}`, workDir);
+    const sessionTitle = (result.data as { title?: string } | undefined)?.title ?? `会话 ${count}`;
+    store.addSession(wechatUserId, sessionId, sessionTitle, workDir);
     console.log(`[opencode] Created session ${sessionId} (#${count}) for user ${wechatUserId.slice(0, 12)}...`);
     return sessionId;
   };
@@ -460,7 +477,9 @@ export async function createOpenCodeService(
         await sleep(delay);
       }
 
-      const result = await retryWithBackoff(
+      // Run prompt and auto-approve permissions concurrently
+      let stopPolling = false;
+      const promptPromise = retryWithBackoff(
         () => state.client.session.prompt({
           sessionID: sessionId,
           directory: workDir,
@@ -472,6 +491,34 @@ export async function createOpenCodeService(
         "session.prompt",
         { maxRetries: 3, baseDelayMs: 3_000, maxDelayMs: 30_000 },
       );
+
+      // Poll for pending permissions and auto-approve while prompt is running
+      const approvalPromise = (async () => {
+        await sleep(2_000);
+        while (!stopPolling) {
+          try {
+            const perms = await state.client.permission.list({ directory: workDir });
+            if (perms.data && Array.isArray(perms.data) && perms.data.length > 0) {
+              for (const perm of perms.data as Array<{ id: string; permission: string; patterns: string[] }>) {
+                const desc = perm.patterns?.length > 0 ? perm.patterns.join(", ") : perm.permission;
+                console.log(`[opencode] Auto-approving permission: ${desc}`);
+                await state.client.permission.reply({
+                  requestID: perm.id,
+                  directory: workDir,
+                  reply: "once",
+                });
+              }
+            }
+          } catch {
+            // Permission check failed, ignore
+          }
+          await sleep(2_000);
+        }
+      })();
+
+      const result = await promptPromise;
+      stopPolling = true;
+      await approvalPromise.catch(() => {});
 
       if (!result.error) {
         const response = result.data as { info: AssistantMessage; parts: Part[] } | undefined;
@@ -890,6 +937,60 @@ export async function createOpenCodeService(
     summarize,
     listTodos,
     sendPromptAsync,
+    listPendingPermissions: async (wechatUserId: string) => {
+      const result = await retryWithBackoff(
+        () => state.client.permission.list({ directory: defaultDir }),
+        "permission.list",
+      );
+
+      if (result.error || !result.data) {
+        console.error("[opencode] listPendingPermissions failed:", result.error);
+        return [];
+      }
+
+      const perms = result.data as Array<{ id: string; sessionID: string; permission: string; patterns: string[] }>;
+      return perms.map((r) => ({
+        id: r.id,
+        sessionId: r.sessionID,
+        permission: r.permission,
+        patterns: r.patterns,
+        tool: undefined,
+      }));
+    },
+    approvePermission: async (wechatUserId: string, requestId: string, always = false) => {
+      await retryWithBackoff(
+        () => state.client.permission.reply({
+          requestID: requestId,
+          directory: defaultDir,
+          reply: always ? "always" : "once",
+        }),
+        "permission.reply",
+      );
+      console.log(`[opencode] Approved permission ${requestId} for user ${wechatUserId.slice(0, 12)}...`);
+    },
+    denyPermission: async (wechatUserId: string, requestId: string) => {
+      await retryWithBackoff(
+        () => state.client.permission.reply({
+          requestID: requestId,
+          directory: defaultDir,
+          reply: "reject",
+        }),
+        "permission.reply",
+      );
+      console.log(`[opencode] Denied permission ${requestId} for user ${wechatUserId.slice(0, 12)}...`);
+    },
+    getSessionInfo: async (wechatUserId: string) => {
+      const result = await retryWithBackoff(
+        () => state.client.session.list({ directory: defaultDir }),
+        "session.list",
+      );
+      if (result.error || !result.data) {
+        console.error("[opencode] session.list failed:", result.error);
+        return [];
+      }
+      const sessions = result.data as Array<{ id: string; title?: string }>;
+      return sessions.map((s) => ({ id: s.id, title: s.title ?? s.id }));
+    },
   };
 }
 

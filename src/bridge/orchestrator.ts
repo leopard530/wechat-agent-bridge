@@ -87,7 +87,7 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
         "/abort — 中断当前任务",
         "/todo — 查看当前任务列表",
         "/task <文本> — 异步大任务",
-        "/approve, /a — 批准操作",
+        "/approve, /a — 批准操作 (/approve always 永久授权)",
         "/deny, /d — 拒绝操作",
         "/status — 查看运行状态",
         "━━",
@@ -172,16 +172,43 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
     }
 
     // ── /approve, /deny — explicit approval commands ──
-    if (text === "/approve" || text === "/a") {
+    if (text === "/approve" || text === "/a" || text === "/approve always") {
+      const always = text === "/approve always";
       awaitingApproval.delete(userId);
-      await channel.reply(msg, "⏳ 正在发送批准...");
-      // Fall through to send "approve" as a prompt
-      // (OpenCode interprets it in conversation context)
-      text = "approve";
+      try {
+        const permissions = await opencode.listPendingPermissions(userId);
+        if (permissions.length > 0) {
+          await opencode.approvePermission(userId, permissions[0].id, always);
+          await channel.reply(msg, always ? "✅ 已批准 (始终允许)" : "✅ 已批准");
+        } else {
+          await channel.reply(msg, "⚠️ 没有待批准的权限请求，将作为文本发送");
+          text = "approve";
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "未知错误";
+        await channel.reply(msg, `❌ 批准失败: ${errMsg}，将作为文本发送`);
+        text = "approve";
+      }
+      // If text was not changed, command was handled — return
+      if (text !== "approve") return;
     } else if (text === "/deny" || text === "/d") {
       awaitingApproval.delete(userId);
-      await channel.reply(msg, "⏳ 正在发送拒绝...");
-      text = "deny";
+      try {
+        const permissions = await opencode.listPendingPermissions(userId);
+        if (permissions.length > 0) {
+          await opencode.denyPermission(userId, permissions[0].id);
+          await channel.reply(msg, "❌ 已拒绝");
+        } else {
+          await channel.reply(msg, "⚠️ 没有待批准的权限请求，将作为文本发送");
+          text = "deny";
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "未知错误";
+        await channel.reply(msg, `❌ 拒绝失败: ${errMsg}，将作为文本发送`);
+        text = "deny";
+      }
+      // If text was not changed, command was handled — return
+      if (text !== "deny") return;
     }
 
     // ── /cd <path> — switch working directory ──
@@ -222,9 +249,20 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
         await channel.reply(msg, "暂无会话记录，发送第一条消息自动创建");
         return;
       }
+
+      let sessionTitles = new Map<string, string>();
+      try {
+        const info = await opencode.getSessionInfo(userId);
+        for (const s of info) {
+          sessionTitles.set(s.id, s.title);
+        }
+      } catch { /* ignore */ }
+
       const lines = entry.sessions.map((s, i) => {
         const marker = i === entry.activeIndex ? " ✅" : "";
-        return `${i + 1}. ${s.title}${marker}`;
+        const title = sessionTitles.get(s.opencodeSessionId) ?? s.title;
+        const time = s.createdAt ? new Date(s.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+        return `${i + 1}. ${title}  ${time}${marker}`;
       });
       await channel.reply(msg, `会话列表:\n\n${lines.join("\n")}\n\n切换: /session <编号>`);
       return;
@@ -739,10 +777,21 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
       // Detect if this response asks for tool approval — set await state
       if (detectApprovalRequest(cleanText)) {
         awaitingApproval.add(userId);
-        await channel.reply(
-          msg,
-          "💡 回复数字选择，或 /approve /deny",
-        );
+        let hint = "💡 回复 /approve 或 /deny";
+
+        // Check for pending permission via API for more detail
+        try {
+          const perms = await opencode.listPendingPermissions(userId);
+          if (perms.length > 0) {
+            const p = perms[0];
+            const permDesc = p.patterns.length > 0
+              ? p.patterns.slice(0, 3).join("\n   ")
+              : p.permission;
+            hint = `🔒 权限请求: ${permDesc}\n💡 /approve 批准 / /deny 拒绝\n/approve always 永久授权`;
+          }
+        } catch { /* ignore */ }
+
+        await channel.reply(msg, hint);
       }
 
       console.log(
