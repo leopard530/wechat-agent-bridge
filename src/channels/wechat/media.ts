@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { UploadedFileInfo } from "../cdn/upload.js";
+import type { UploadedFileInfo } from "./cdn/upload.js";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const ChannelVersion = "1.0.0";

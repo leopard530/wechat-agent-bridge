@@ -1,6 +1,7 @@
 /**
- * Convert OpenCode markdown responses into WeChat-friendly plain text.
- * WeChat doesn't render markdown — strip what looks bad, keep what works.
+ * Convert OpenCode markdown responses into channel-appropriate format.
+ * WeChat: strip markdown to plain text (no markdown rendering).
+ * Feishu: pass through markdown as-is (native markdown rendering).
  */
 
 export interface ExtractedCodeFile {
@@ -77,6 +78,39 @@ function langToExt(lang: string): string {
   };
   const key = lang.toLowerCase().trim();
   return map[key] ?? "txt";
+}
+
+/**
+ * Format a markdown response for the given channel.
+ * Dispatching wrapper — each channel gets its own formatting rules.
+ */
+export function formatForChannel(channel: string, md: string): string {
+  switch (channel) {
+    case "feishu":
+      return formatForFeishu(md);
+    case "wechat":
+    default:
+      return formatForWechat(md);
+  }
+}
+
+/**
+ * Feishu supports native markdown rendering (bold, code blocks, links, etc.).
+ * Only minimal cleanup: strip HTML tags and fix heading levels.
+ */
+export function formatForFeishu(md: string): string {
+  let text = md;
+
+  // Strip raw HTML tags (Feishu markdown doesn't render them)
+  text = text.replace(/<[^>]*>/g, "");
+
+  // Convert ### heading → **heading** (Feishu markdown uses bold for emphasis)
+  // Feishu supports # through ###### natively, so keep headings as-is unless they look bad
+
+  // Condense 3+ blank lines → 2
+  text = text.replace(/\n{3,}/g, "\n\n");
+
+  return text.trim();
 }
 
 export function formatForWechat(md: string): string {

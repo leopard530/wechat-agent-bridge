@@ -1,5 +1,6 @@
 import {
   createOpencode,
+  createOpencodeClient,
   type TextPart,
   type ToolPart,
   type PatchPart,
@@ -15,13 +16,21 @@ import {
 import type { SessionStore, SessionEntry } from "../store/session-store.js";
 import { config } from "../config.js";
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 
 export interface ModelInfo {
   key: string;
   label: string;
   provider: string;
+  isDefault?: boolean;
+}
+
+export interface AgentInfo {
+  name: string;
+  description?: string;
+  mode: "primary" | "subagent" | "all";
+  native?: boolean;
+  hidden?: boolean;
 }
 
 export interface FileOutput {
@@ -73,6 +82,7 @@ export interface OpenCodeService {
   needsNewSession(wechatUserId: string): boolean;
   sendPrompt(wechatUserId: string, text: string): Promise<PromptResult>;
   listModels(): Promise<ModelInfo[]>;
+  listAgents(): Promise<AgentInfo[]>;
   listSessions(wechatUserId: string): SessionEntry | null;
   switchSession(wechatUserId: string, index: number): boolean;
   setWorkDir(wechatUserId: string, workDir: string): void;
@@ -86,6 +96,8 @@ export interface OpenCodeService {
   redo(wechatUserId: string): Promise<string>;
   shutdown(): void;
   isHealthy(): Promise<boolean>;
+  /** Get the model actually used in the last prompt for a user. */
+  getLastUsedModel(wechatUserId: string): string | undefined;
 
   listFiles(wechatUserId: string, dirPath?: string): Promise<FileEntry[]>;
   readFile(wechatUserId: string, filePath: string): Promise<FileContentResult>;
@@ -145,6 +157,9 @@ function isRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError" || err.name === "TimeoutError") return false;
 
+  // TypeError from fetch usually means network failure (server down, DNS, etc.)
+  if (err.name === "TypeError") return true;
+
   const msg = err.message.toLowerCase();
   if (msg.includes("econnrefused")) return true;
   if (msg.includes("etimedout")) return true;
@@ -165,40 +180,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Build a descriptive error from an OpenCode SDK result with error.
+ * Includes HTTP status code, status text, and error details.
+ */
+function buildPromptError(result: { error: unknown; response?: { status: number; statusText: string } }): Error {
+  const status = result.response
+    ? `HTTP ${result.response.status} ${result.response.statusText}`
+    : "No HTTP response";
+  const errObj = result.error as Record<string, unknown> | undefined;
+
+  // If the error is empty or only has a name, the status is more informative
+  if (!errObj || Object.keys(errObj).filter((k) => k !== "name").length === 0) {
+    const name = errObj?.name;
+    return new Error(
+      `OpenCode prompt error: ${status}${name ? ` (${name})` : ""} — upstream server returned no details`,
+    );
+  }
+
+  return new Error(`OpenCode prompt error: ${status} — ${JSON.stringify(result.error)}`);
+}
+
 // ── Default agent detection ────────────────────────────────────────
 
 let _detectedDefaultAgent: string | undefined = undefined;
 let _agentDetected = false;
-
-function detectDefaultAgent(): string | undefined {
-  if (_agentDetected) return _detectedDefaultAgent;
-  _agentDetected = true;
-
-  const configDir = process.env.OPENCODE_CONFIG_DIR ??
-    join(homedir(), ".config", "opencode");
-
-  console.log(`[opencode] Looking for plugin config in ${configDir}...`);
-
-  for (const name of ["opencode.jsonc", "opencode.json"]) {
-    try {
-      const raw = readFileSync(join(configDir, name), "utf-8");
-      const stripped = raw.replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
-      const cfg = JSON.parse(stripped);
-      const plugins: string[] = cfg?.plugin ?? [];
-      console.log(`[opencode] ${name}: plugins = [${plugins.join(", ")}]`);
-      if (plugins.some((p) => p.startsWith("oh-my-openagent"))) {
-        _detectedDefaultAgent = "sisyphus";
-        console.log("[opencode] Detected oh-my-openagent plugin → default agent: sisyphus");
-        return _detectedDefaultAgent;
-      }
-    } catch (e) {
-      console.log(`[opencode] ${name}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  console.log("[opencode] No oh-my-openagent plugin detected, using OpenCode default agent");
-  return _detectedDefaultAgent;
-}
 
 // ── Health monitor ─────────────────────────────────────────────────
 
@@ -210,12 +216,38 @@ const RECONNECT_MAX_DELAY_MS = 300_000;
 export async function createOpenCodeService(
   store: SessionStore,
 ): Promise<OpenCodeService> {
-  const { client, server } = await createOpencode({
-    hostname: config.opencode.host,
-    port: config.opencode.port,
-  });
-
   const defaultDir = config.store.opencodeDir;
+  const baseUrl = `http://${config.opencode.host}:${config.opencode.port}`;
+
+  let client: ReturnType<typeof createOpencodeClient>;
+  let server: { url: string; close(): void };
+  let managedServer = false;
+
+  try {
+    console.log(`[opencode] Probing existing server at ${baseUrl}...`);
+    const probe = await fetch(`${baseUrl}/api/session/list?directory=${encodeURIComponent(defaultDir)}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (probe.ok || probe.status === 400 || probe.status === 404) {
+      console.log(`[opencode] Found existing server at ${baseUrl}, connecting...`);
+      client = createOpencodeClient({ baseUrl });
+      server = { url: baseUrl, close: () => { console.log("[opencode] Disconnected from external server (not closing)"); } };
+    } else {
+      throw new Error(`Server responded with status ${probe.status}`);
+    }
+  } catch (err) {
+    const probeErr = err instanceof Error ? err.message : String(err);
+    console.log(`[opencode] No existing server found (${probeErr}), spawning new one...`);
+    const result = await createOpencode({
+      hostname: config.opencode.host,
+      port: config.opencode.port,
+    });
+    client = result.client;
+    server = result.server;
+    managedServer = true;
+  }
+
   const state = { client, server };
   let serverGeneration = 0;
   const validSessions = new Set<string>();
@@ -223,7 +255,10 @@ export async function createOpenCodeService(
   // Dedup concurrent session creation for the same user
   const pendingSessions = new Map<string, Promise<string>>();
 
-  console.log(`[opencode] Server started at ${server.url}`);
+  // Track the model actually used in the last successful response per user
+  const lastUsedModel = new Map<string, string>();
+
+  console.log(`[opencode] Server ready at ${server.url}${managedServer ? " (spawned)" : " (external)"}`);
 
   // ── Health monitor ──────────────────────────────────────────
 
@@ -258,7 +293,9 @@ export async function createOpenCodeService(
     reconnecting = true;
     stopHealthMonitor();
     console.error("[opencode] Connection lost — starting reconnect loop...");
-    try { state.server.close(); } catch { /* already gone */ }
+    if (managedServer) {
+      try { state.server.close(); } catch { /* already gone */ }
+    }
 
     let attempt = 0;
     while (true) {
@@ -268,12 +305,41 @@ export async function createOpenCodeService(
           console.log(`[opencode] Reconnect attempt ${attempt + 1} in ${Math.round(delay / 1000)}s...`);
           await sleep(delay);
         }
+
+        const probeBaseUrl = `http://${config.opencode.host}:${config.opencode.port}`;
+
+        // 1. Try probing for an existing server
+        try {
+          const probe = await fetch(`${probeBaseUrl}/api/session/list?directory=${encodeURIComponent(defaultDir)}`, {
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(3_000),
+          });
+          if (probe.ok || probe.status === 400 || probe.status === 404) {
+            console.log(`[opencode] Found existing server at ${probeBaseUrl}, reconnecting...`);
+            state.client = createOpencodeClient({ baseUrl: probeBaseUrl });
+            state.server = { url: probeBaseUrl, close: () => { console.log("[opencode] Disconnected from external server (not closing)"); } };
+            managedServer = false;
+            serverGeneration++;
+            validSessions.clear();
+            healthy = true;
+            consecutiveFails = 0;
+            reconnecting = false;
+            console.log(`[opencode] ✅ Reconnected to existing server at ${probeBaseUrl}`);
+            startHealthMonitor();
+            return;
+          }
+        } catch {
+          // No existing server found, fall through to spawn
+        }
+
+        // 2. No existing server — spawn a new one
         const result = await createOpencode({
           hostname: config.opencode.host,
           port: config.opencode.port,
         });
         state.client = result.client;
         state.server = result.server;
+        managedServer = true;
         serverGeneration++;
         validSessions.clear();
         healthy = true;
@@ -304,6 +370,30 @@ export async function createOpenCodeService(
   }
 
   startHealthMonitor();
+
+  // ── Detect default agent from API ──
+
+  void (async () => {
+    try {
+      const result = await retryWithBackoff(
+        () => (state.client as unknown as { app: { agents: (params?: { directory?: string }) => Promise<{ error: unknown; data: unknown }> } }).app.agents({ directory: defaultDir }),
+        "app.agents",
+      );
+      if (!result.error && result.data) {
+        const agents = result.data as Array<{ name: string; mode: string; hidden?: boolean }>;
+        const primary = agents.find((a) => a.mode === "primary" && !a.hidden);
+        if (primary) {
+          _detectedDefaultAgent = primary.name;
+          console.log(`[opencode] Default agent: ${primary.name}`);
+        } else {
+          console.log("[opencode] No primary agent detected, using OpenCode default");
+        }
+      }
+    } catch (err) {
+      console.warn("[opencode] Failed to detect default agent:", err instanceof Error ? err.message : String(err));
+    }
+    _agentDetected = true;
+  })();
 
   // ── Service methods ─────────────────────────────────────────
 
@@ -366,7 +456,7 @@ export async function createOpenCodeService(
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
         const delay = Math.min(5_000 * Math.pow(2, attempt), 30_000);
-        console.log(`[opencode] Retrying prompt after UnknownError (attempt ${attempt + 1}/3 in ${Math.round(delay / 1000)}s)...`);
+        console.warn(`[opencode] Retrying prompt (attempt ${attempt + 1}/3 in ${Math.round(delay / 1000)}s)...`);
         await sleep(delay);
       }
 
@@ -389,6 +479,7 @@ export async function createOpenCodeService(
 
         if (response?.info) {
           console.log(`[opencode] Response from ${response.info.providerID}/${response.info.modelID} (${response.info.agent})`);
+          lastUsedModel.set(wechatUserId, `${response.info.providerID}/${response.info.modelID}`);
         }
 
         const textParts = parts
@@ -404,14 +495,20 @@ export async function createOpenCodeService(
         };
       }
 
-      // Retry transient server errors (plugin not ready, etc.)
+      // Retry transient server errors (plugin not ready, rate limit, etc.)
       const err = result.error as Record<string, unknown>;
-      if (err.name === "UnknownError") {
-        lastError = new Error(`OpenCode prompt error: ${JSON.stringify(result.error)}`);
+      const status = result.response?.status;
+      const isRetryable =
+        err.name === "UnknownError" ||
+        !err.name ||
+        (typeof status === "number" && [500, 502, 503, 504].includes(status));
+      if (isRetryable) {
+        lastError = buildPromptError(result);
+        console.warn(`[opencode] Prompt error (attempt ${attempt + 1}/3): ${buildPromptError(result).message}`);
         continue;
       }
 
-      throw new Error(`OpenCode prompt error: ${JSON.stringify(result.error)}`);
+      throw buildPromptError(result);
     }
 
     throw lastError;
@@ -428,18 +525,44 @@ export async function createOpenCodeService(
       return [];
     }
 
-    const data = result.data as { providers: Array<{ id: string; name: string; models: Record<string, { name?: string }> }> };
+    const data = result.data as { providers: Array<{ id: string; name: string; models: Record<string, { name?: string }> }>; default?: Record<string, string> };
+    const defaults: Record<string, string> = data.default ?? {};
     const models: ModelInfo[] = [];
     for (const provider of data.providers ?? []) {
       for (const [modelId, model] of Object.entries(provider.models)) {
+        const key = `${provider.id}/${modelId}`;
         models.push({
-          key: `${provider.id}/${modelId}`,
+          key,
           label: model.name ?? modelId,
           provider: provider.name,
+          isDefault: defaults[provider.id] === modelId,
         });
       }
     }
     return models;
+  };
+
+  const listAgents = async (): Promise<AgentInfo[]> => {
+    const result = await retryWithBackoff(
+      () => (state.client as unknown as { app: { agents: (params?: { directory?: string }) => Promise<{ error: unknown; data: unknown }> } }).app.agents({ directory: defaultDir }),
+      "app.agents",
+    );
+
+    if (result.error || !result.data) {
+      console.error("[opencode] Failed to list agents:", result.error);
+      return [];
+    }
+
+    const agents = result.data as Array<{ name: string; description?: string; mode: string; native?: boolean; hidden?: boolean }>;
+    return agents
+      .filter((a) => !a.hidden)
+      .map((a) => ({
+        name: a.name,
+        description: a.description,
+        mode: a.mode as "primary" | "subagent" | "all",
+        native: a.native,
+        hidden: a.hidden,
+      }));
   };
 
   const setWorkDir = (wechatUserId: string, workDir: string): void => {
@@ -736,21 +859,27 @@ export async function createOpenCodeService(
     },
     sendPrompt,
     listModels,
+    listAgents,
     listSessions,
     switchSession,
     setWorkDir,
     setModel,
     setSystem,
     setAgent,
-    getDefaultAgent: () => detectDefaultAgent(),
+    getDefaultAgent: () => _detectedDefaultAgent,
     abort,
     undo,
     redo,
     shutdown: () => {
       stopHealthMonitor();
-      state.server.close();
+      if (managedServer) {
+        state.server.close();
+      } else {
+        console.log("[opencode] Disconnected from external server (not closing)");
+      }
     },
     isHealthy: async () => healthy && !reconnecting,
+    getLastUsedModel: (wechatUserId: string) => lastUsedModel.get(wechatUserId),
     listFiles,
     readFile,
     findFiles,

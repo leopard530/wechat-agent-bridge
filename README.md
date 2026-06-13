@@ -9,37 +9,38 @@
 
 # wechat-agent-bridge
 
-> 通过微信直接与 AI 编程助手对话 —— 支持 OpenCode（即将支持 Claude Code）。<br>
-> Chat with AI coding assistants directly from WeChat — OpenCode (Claude Code coming soon).
+> 通过微信 / 飞书直接与 AI 编程助手对话。<br>
+> Chat with AI coding assistants directly from WeChat / Feishu.
 
 ```
- 👤 微信消息  →  🌉 Bridge  →  🤖 AI Agent  →  📲 微信回复
+ 👤 消息  →  🌉 Bridge  →  🤖 AI Agent  →  📲 回复
 ```
 
 ---
 
 ## ✨ 功能亮点 / Features
 
-- **微信原生** — 发消息、批准/拒绝操作、管理会话，全在微信内完成
-- **多会话支持** — 每个微信用户可拥有多个独立 AI 会话，自由切换
-- **自动容灾** — 指数退避重试、心跳监控、自动重连，无需手动干预
-- **扫码即用** — 首次扫码登录后凭据缓存，后续启动免扫码
-- **可扩展架构** — 抽象 AI 后端接口，支持多 AI 提供商接入
+- **微信 + 飞书双通道** — 微信 iLink + 飞书 WebSocket 同时在线
+- **多会话支持** — 每个用户可拥有多个独立 AI 会话，自由切换
+- **自动容灾** — 指数退避重试、心跳监控、自动重连
+- **智能连接** — 自动探测已运行的 OpenCode 服务，无需手动管理进程
+- **扫码即用** — 首次扫码登录后凭据缓存，后续免扫码
+- **模型 / Agent 管理** — 列出、切换 AI 模型和 Agent
+- **文件浏览** — ls / cat / find / grep / diff / worktree 全支持
+- **代码文件发送** — 大段代码自动提取为文件附件发送到微信
 
 ---
 
 ## 📦 架构 / Architecture
 
 ```
-微信用户  ←→  iLink (ilinkai.weixin.qq.com)
-                       │
-                @pinixai/weixin-bot
-                       │
-            bridge/orchestrator  ← 命令解析 + 格式化
-                       │
-                @opencode-ai/sdk
-                       │
-                   OpenCode AI
+微信用户  ←→  iLink / 飞书 WebSocket
+                        │
+             bridge/orchestrator  ← 命令解析 + 格式化
+                        │
+                 @opencode-ai/sdk
+                        │
+                    OpenCode AI
 ```
 
 ---
@@ -70,8 +71,10 @@ npm run build
 ### 启动 / Run
 
 ```bash
-npm run dev   # 开发调试，支持热重载
-npm start     # 生产运行（需先 npm run build）
+npm run dev             # 开发调试
+npm start               # 生产运行（需先 npm run build）
+npm run dev -- --channel wechat   # 只启动微信通道
+npm run dev -- --channel feishu   # 只启动飞书通道
 ```
 
 首次启动会打印扫码链接，用微信扫描即可登录。凭据缓存在 `data/wechat/` 下，后续无需重复扫码。
@@ -89,33 +92,62 @@ npm start     # 生产运行（需先 npm run build）
 | `/new` | 创建新的 AI 会话 |
 | `/sessions` | 列出所有活跃会话 |
 | `/session <n>` | 切换到第 n 号会话 |
+| `/messages [N]` | 查看最近 N 条对话 |
 | `/undo` | 撤销上一步操作 |
 | `/redo` | 重做已撤销的操作 |
+| `/summarize` | AI 压缩当前会话 |
 | `/abort` | 中断当前正在执行的任务 |
 
 ### 模型 / Models
 
 | 命令 | 说明 |
 |---------|-------------|
-| `/models` | 列出可用 AI 模型 |
-| `/model` | 查看当前使用的模型 |
-| `/model <n>` | 切换到第 n 号模型 |
+| `/models` | 列出可用模型（加任意参数刷新缓存） |
+| `/model` | 查看当前模型及实际使用的模型 |
+| `/model <序号>` | 使用 `/models` 列表中的序号切换模型 |
+| `/model <provider/model>` | 按 provider/model 格式切换模型 |
+| `/model clear` | 恢复默认模型 |
 
-### 文件与目录 / Files & Navigation
-
-| 命令 | 说明 |
-|---------|-------------|
-| `/cd <路径>` | 切换主机工作目录 |
-| `/send <路径>` | 将主机上的文件发送到微信 |
-
-### 控制 / Control
+### Agent
 
 | 命令 | 说明 |
 |---------|-------------|
+| `/agents` | 列出可用 Agent |
+| `/agent` | 查看当前 Agent |
+| `/agent <序号/名称>` | 切换 Agent |
+| `/agent clear` | 恢复默认 Agent |
+
+### 系统提示 / System Prompt
+
+| 命令 | 说明 |
+|---------|-------------|
+| `/system` | 查看当前系统提示 |
+| `/system <提示词>` | 设置系统提示 |
+| `/system clear` | 清除系统提示 |
+
+### 文件浏览 / File Browsing
+
+| 命令 | 说明 |
+|---------|-------------|
+| `/ls [路径]` | 列出目录文件 |
+| `/cat <路径>` | 查看文件内容 |
+| `/find <模式>` | 按名称搜索文件 |
+| `/grep <正则>` | 搜索文件内容 |
+| `/diff` | 查看 git diff |
+| `/worktree` | 查看 git worktree |
+
+### 其他 / Other
+
+| 命令 | 说明 |
+|---------|-------------|
+| `/cd <路径>` | 切换工作目录 |
+| `/send <路径>` | 将文件发送到微信 |
+| `/todo` | 查看当前任务列表 |
+| `/task <文本>` | 异步大任务 |
 | `/approve` `/a` | 批准待确认操作 |
 | `/deny` `/d` | 拒绝待确认操作 |
 | `/status` | 查看 Bridge 和连接状态 |
-| `/help` `/h` | 显示此帮助信息 |
+| `/help` `/h` | 显示帮助信息 |
 
 直接发送文字内容即为 AI 对话消息。
 
@@ -123,14 +155,14 @@ npm start     # 生产运行（需先 npm run build）
 
 ## 🔄 连接恢复 / Connection Recovery
 
-Bridge 内置多层容灾机制，**无需手动干预**：
+Bridge 内置多层容灾机制：
 
-- **API 重试** — 所有 OpenCode 调用均采用指数退避重试（1s → 2s → 4s → … → 30s）
+- **智能连接** — 启动时自动探测已运行的 OpenCode 服务，直接连接；无则自动启动新进程
+- **API 重试** — 所有 OpenCode 调用均采用指数退避重试（1s → 30s）
+- **503 重试** — 服务端 5xx 错误自动重试 3 次
 - **健康监控** — 每 30 秒心跳检测，连续 3 次失败触发自动恢复
-- **自动重连** — AI 进程异常退出后自动重拉，间隔逐步增加（5s → 10s → 20s → … → 最多 5 分钟）
-- **消息排队** — 重连期间微信消息排队等待，恢复后继续处理
-
-无论是 `npm run dev` 还是 `npm start` 启动，均自动容灾恢复。
+- **自动重连** — 服务中断后先探测同端口是否有新服务，没有则启动新进程
+- **飞书代理兼容** — 自动绕过本地代理，直连飞书 API
 
 ---
 
@@ -142,9 +174,11 @@ Bridge 内置多层容灾机制，**无需手动干预**：
 |----------|---------|-------------|
 | `OPENCODE_HOST` | `127.0.0.1` | OpenCode 服务地址 |
 | `OPENCODE_PORT` | `4096` | OpenCode 服务端口 |
-| `OPENCODE_MODEL` | — | 默认模型，如 `anthropic/claude-sonnet-4` |
+| `OPENCODE_MODEL` | — | 默认模型，如 `opencode-go/qwen3.7-plus` |
 | `WECHAT_DATA_DIR` | `./data/wechat` | 微信凭据存储路径 |
 | `SESSION_STORE_PATH` | `./data/sessions.json` | 会话持久化文件 |
+| `FEISHU_APP_ID` | — | 飞书机器人 App ID |
+| `FEISHU_APP_SECRET` | — | 飞书机器人 App Secret |
 | `LOG_LEVEL` | `info` | 日志级别 |
 
 ---
@@ -187,8 +221,9 @@ npm run test:watch    # 监听模式
 | 技术 | 用途 |
 |------|------|
 | [TypeScript](https://www.typescriptlang.org/) | 类型安全的 JavaScript |
-| [OpenCode SDK](https://github.com/opencode-ai/sdk) | AI Agent 通信 |
+| [OpenCode SDK v2](https://github.com/opencode-ai/sdk) | AI Agent 通信 |
 | [@pinixai/weixin-bot](https://www.npmjs.com/package/@pinixai/weixin-bot) | 微信 iLink 协议客户端 |
+| [@larksuiteoapi/node-sdk](https://www.npmjs.com/package/@larksuiteoapi/node-sdk) | 飞书机器人 SDK |
 | [Vitest](https://vitest.dev/) | 单元测试框架 |
 
 ---

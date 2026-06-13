@@ -1,29 +1,8 @@
-import { WeixinBot, type IncomingMessage } from "@pinixai/weixin-bot";
-import { config } from "../config.js";
-import { uploadToWeixinCdn, UploadMediaType, type UploadedFileInfo } from "../cdn/upload.js";
+import { WeixinBot, type IncomingMessage as BotIncomingMessage } from "@pinixai/weixin-bot";
+import { config } from "../../config.js";
+import { uploadToWeixinCdn, UploadMediaType, type UploadedFileInfo } from "./cdn/upload.js";
 import { sendImage, sendFile } from "./media.js";
-
-export type { IncomingMessage };
-
-export interface WeChatService {
-  /** Start the bot: login (QR if needed) and begin polling. */
-  start(): Promise<void>;
-  /** Stop the bot gracefully. */
-  stop(): void;
-  /** Register a handler for incoming messages. */
-  onMessage(handler: (msg: IncomingMessage) => Promise<void>): void;
-  /** Reply to a message. */
-  reply(msg: IncomingMessage, text: string): Promise<void>;
-  /** Show "typing..." indicator. */
-  sendTyping(userId: string): Promise<void>;
-  /** Cancel "typing..." indicator. */
-  stopTyping(userId: string): Promise<void>;
-
-  /** Upload and send an image file to a user via WeChat. */
-  sendImage(userId: string, filePath: string): Promise<void>;
-  /** Upload and send a file attachment to a user via WeChat. */
-  sendFile(userId: string, filePath: string, fileName?: string): Promise<void>;
-}
+import type { ChannelService, IncomingMessage } from "../types.js";
 
 /**
  * Split a long message into chunks suitable for WeChat (max ~2000 chars).
@@ -80,9 +59,9 @@ export function splitMessage(text: string, maxLen: number): string[] {
   return chunks;
 }
 
-export function createWeChatService(): WeChatService {
+export function createWeChatChannel(): ChannelService {
   const bot = new WeixinBot({
-    tokenPath: config.wechat.dataDir + "/credentials.json",
+    tokenPath: config.channels.wechat.dataDir + "/credentials.json",
   });
 
   // Track credentials and context tokens for media uploads
@@ -90,6 +69,8 @@ export function createWeChatService(): WeChatService {
   const contextTokens = new Map<string, string>();
 
   return {
+    name: "wechat",
+
     start: async () => {
       try {
         const result = await bot.login();
@@ -105,7 +86,7 @@ export function createWeChatService(): WeChatService {
         if (msg.includes("QR") || msg.includes("scan") || msg.includes("login")) {
           console.error(
             "[wechat] Login failed. If the stored token has expired, delete the cache:\n" +
-            `  rm -rf ${config.wechat.dataDir}\n` +
+            `  rm -rf ${config.channels.wechat.dataDir}\n` +
             "Then restart — a new QR code will be generated.",
           );
         }
@@ -116,7 +97,7 @@ export function createWeChatService(): WeChatService {
     stop: () => bot.stop(),
 
     onMessage: (handler) => {
-      bot.onMessage((msg) => {
+      bot.onMessage((msg: BotIncomingMessage) => {
         // Capture context token for media uploads
         if (msg._contextToken) {
           contextTokens.set(msg.userId, msg._contextToken);
@@ -124,17 +105,24 @@ export function createWeChatService(): WeChatService {
         // Fire and forget — don't block the message pipeline while waiting
         // for slow operations like session creation or AI responses.
         // Per-user concurrency is gated by the orchestrator's `active` Set.
-        handler(msg).catch((err) => {
+        const incoming: IncomingMessage = {
+          userId: msg.userId,
+          text: msg.text ?? "",
+          channel: "wechat",
+          raw: msg,
+        };
+        handler(incoming).catch((err) => {
           console.error("[wechat] Handler error:", err);
         });
       });
     },
 
     reply: async (msg, text) => {
+      const botMsg = msg.raw as BotIncomingMessage;
       const chunks = splitMessage(text, 1800);
       for (let i = 0; i < chunks.length; i++) {
         const prefix = chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n` : "";
-        await bot.reply(msg, prefix + chunks[i]);
+        await bot.reply(botMsg, prefix + chunks[i]);
       }
     },
 

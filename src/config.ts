@@ -23,8 +23,14 @@ export const config = {
     model: process.env["OPENCODE_MODEL"],
   },
 
-  wechat: {
-    dataDir: resolve(env("WECHAT_DATA_DIR", "./data/wechat")),
+  channels: {
+    wechat: {
+      dataDir: resolve(env("WECHAT_DATA_DIR", "./data/wechat")),
+    },
+    feishu: {
+      appId: env("FEISHU_APP_ID", ""),
+      appSecret: env("FEISHU_APP_SECRET", ""),
+    },
   },
 
   store: {

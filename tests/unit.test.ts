@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { encryptAesEcb, decryptAesEcb, aesEcbPaddedSize } from "../src/cdn/aes-ecb.js";
-import { buildCdnUploadUrl, buildCdnDownloadUrl } from "../src/cdn/cdn-url.js";
+import { encryptAesEcb, decryptAesEcb, aesEcbPaddedSize } from "../src/channels/wechat/cdn/aes-ecb.js";
+import { buildCdnUploadUrl, buildCdnDownloadUrl } from "../src/channels/wechat/cdn/cdn-url.js";
 import { formatForWechat, extractLargeCodeBlocks } from "../src/bridge/formatter.js";
 import { detectApprovalRequest } from "../src/bridge/orchestrator.js";
-import { splitMessage } from "../src/wechat/bot.js";
+import { splitMessage } from "../src/channels/wechat/adapter.js";
 
 describe("aes-ecb", () => {
   const key = Buffer.from("0123456789abcdef", "utf-8"); // exactly 16 bytes
