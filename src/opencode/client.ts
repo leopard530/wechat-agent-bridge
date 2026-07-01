@@ -46,6 +46,11 @@ export interface FileOutput {
   label: string;
 }
 
+export interface ProgressUpdate {
+  type: "tool" | "text" | "reasoning" | "step" | "permission" | "compacting";
+  text: string;
+}
+
 export interface PromptResult {
   text: string;
   files: FileOutput[];
@@ -88,7 +93,7 @@ export interface OpenCodeService {
   newSession(wechatUserId: string): Promise<string>;
   /** Returns true if the user needs a new OpenCode session (e.g. after restart). */
   needsNewSession(wechatUserId: string): boolean;
-  sendPrompt(wechatUserId: string, text: string): Promise<PromptResult>;
+  sendPrompt(wechatUserId: string, text: string, onProgress?: (update: ProgressUpdate) => void): Promise<PromptResult>;
   listModels(): Promise<ModelInfo[]>;
   listAgents(): Promise<AgentInfo[]>;
   listSessions(wechatUserId: string): SessionEntry | null;
@@ -451,7 +456,7 @@ export async function createOpenCodeService(
     return sessionId;
   };
 
-  const sendPrompt = async (wechatUserId: string, text: string): Promise<PromptResult> => {
+  const sendPrompt = async (wechatUserId: string, text: string, onProgress?: (update: ProgressUpdate) => void): Promise<PromptResult> => {
     const sessionId = await ensureSession(wechatUserId);
     let workDir = store.getWorkDir(wechatUserId, defaultDir);
 
@@ -477,8 +482,9 @@ export async function createOpenCodeService(
         await sleep(delay);
       }
 
-      // Run prompt and auto-approve permissions concurrently
+      // Run prompt and auto-approve permissions + stream progress concurrently
       let stopPolling = false;
+      let lastSeenMessageIndex = 0;
       const promptPromise = retryWithBackoff(
         () => state.client.session.prompt({
           sessionID: sessionId,
@@ -492,33 +498,64 @@ export async function createOpenCodeService(
         { maxRetries: 3, baseDelayMs: 3_000, maxDelayMs: 30_000 },
       );
 
-      // Poll for pending permissions and auto-approve while prompt is running
-      const approvalPromise = (async () => {
-        await sleep(2_000);
+      // Background polling: permissions + message progress
+      const backgroundPromise = (async () => {
+        await sleep(3_000);
         while (!stopPolling) {
+          // Auto-approve permissions
           try {
             const perms = await state.client.permission.list({ directory: workDir });
             if (perms.data && Array.isArray(perms.data) && perms.data.length > 0) {
               for (const perm of perms.data as Array<{ id: string; permission: string; patterns: string[] }>) {
                 const desc = perm.patterns?.length > 0 ? perm.patterns.join(", ") : perm.permission;
                 console.log(`[opencode] Auto-approving permission: ${desc}`);
+                onProgress?.({ type: "permission", text: desc });
                 await state.client.permission.reply({
                   requestID: perm.id,
                   directory: workDir,
                   reply: "once",
                 });
+                await sleep(500);
               }
             }
-          } catch {
-            // Permission check failed, ignore
+          } catch (err) {
+            console.log(`[opencode] Permission poll: ${err instanceof Error ? err.message : String(err)}`);
           }
-          await sleep(2_000);
+
+          // Stream progress: poll recent messages for tool calls / steps
+          if (onProgress) {
+            try {
+              const msgs = await state.client.session.messages({
+                sessionID: sessionId,
+                directory: workDir,
+                limit: 10,
+              });
+              if (msgs.data && Array.isArray(msgs.data)) {
+                const msgList = msgs.data as Array<{ info: { role: string; time?: { created: number } }; parts: Part[] }>;
+                for (let i = lastSeenMessageIndex; i < msgList.length; i++) {
+                  const m = msgList[i];
+                  if (m.info?.role !== "assistant") continue;
+                  for (const part of m.parts ?? []) {
+                    if (part.type === "tool" && (part as ToolPart).state?.status === "running") {
+                      const tool = part as ToolPart;
+                      onProgress({ type: "tool", text: tool.tool ?? "running tool..." });
+                    }
+                  }
+                }
+                lastSeenMessageIndex = msgList.length;
+              }
+            } catch {
+              // Message polling failed, ignore
+            }
+          }
+
+          await sleep(3_000);
         }
       })();
 
       const result = await promptPromise;
       stopPolling = true;
-      await approvalPromise.catch(() => {});
+      await backgroundPromise.catch(() => {});
 
       if (!result.error) {
         const response = result.data as { info: AssistantMessage; parts: Part[] } | undefined;

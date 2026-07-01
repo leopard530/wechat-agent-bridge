@@ -1,5 +1,5 @@
 import type { IncomingMessage, ChannelService } from "../channels/types.js";
-import type { OpenCodeService, ModelInfo, AgentInfo } from "../opencode/client.js";
+import type { OpenCodeService, ModelInfo, AgentInfo, ProgressUpdate } from "../opencode/client.js";
 import type { SessionStore } from "../store/session-store.js";
 import { config } from "../config.js";
 import { formatForChannel, extractLargeCodeBlocks } from "./formatter.js";
@@ -729,8 +729,20 @@ export async function startBridge(options: BridgeOptions): Promise<void> {
       // Show typing indicator
       await channel.sendTyping(userId);
 
+      // Progress callback: send intermediate updates to user
+      let lastProgressSent = 0;
+      const onProgress = (update: ProgressUpdate) => {
+        if (update.type === "tool") {
+          const now = Date.now();
+          // Throttle: don't send more than one progress update per 5 seconds
+          if (now - lastProgressSent < 5_000) return;
+          lastProgressSent = now;
+          channel.reply(msg, `🔧 ${update.text}`).catch(() => {});
+        }
+      };
+
       // Send to OpenCode
-      const result = await opencode.sendPrompt(userId, text);
+      const result = await opencode.sendPrompt(userId, text, onProgress);
 
       // Stop typing
       await channel.stopTyping(userId);
