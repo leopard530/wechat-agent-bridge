@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.66.1",
+    "@larksuiteoapi/node-sdk": "^1.68.0",
     "@opencode-ai/sdk": "^1.17.12",
     "@pinixai/weixin-bot": "^1.0.0",
     "dotenv": "^16.4.7"
