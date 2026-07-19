@@ -1,6 +1,7 @@
 import {
   createOpencode,
   createOpencodeClient,
+  type OpencodeClient,
   type TextPart,
   type ToolPart,
   type PatchPart,
@@ -240,7 +241,7 @@ export async function createOpenCodeService(
   const defaultDir = config.store.opencodeDir;
   const baseUrl = `http://${config.opencode.host}:${config.opencode.port}`;
 
-  let client: ReturnType<typeof createOpencodeClient>;
+  let client: OpencodeClient;
   let server: { url: string; close(): void };
   let managedServer = false;
 
@@ -397,12 +398,11 @@ export async function createOpenCodeService(
   void (async () => {
     try {
       const result = await retryWithBackoff(
-        () => (state.client as unknown as { app: { agents: (params?: { directory?: string }) => Promise<{ error: unknown; data: unknown }> } }).app.agents({ directory: defaultDir }),
+        () => state.client.app.agents({ directory: defaultDir }),
         "app.agents",
       );
       if (!result.error && result.data) {
-        const agents = result.data as Array<{ name: string; mode: string; hidden?: boolean }>;
-        const primary = agents.find((a) => a.mode === "primary" && !a.hidden);
+        const primary = result.data.find((a) => a.mode === "primary" && !a.hidden);
         if (primary) {
           _detectedDefaultAgent = primary.name;
           console.log(`[opencode] Default agent: ${primary.name}`);
@@ -628,7 +628,7 @@ export async function createOpenCodeService(
 
   const listAgents = async (): Promise<AgentInfo[]> => {
     const result = await retryWithBackoff(
-      () => (state.client as unknown as { app: { agents: (params?: { directory?: string }) => Promise<{ error: unknown; data: unknown }> } }).app.agents({ directory: defaultDir }),
+      () => state.client.app.agents({ directory: defaultDir }),
       "app.agents",
     );
 
@@ -637,8 +637,7 @@ export async function createOpenCodeService(
       return [];
     }
 
-    const agents = result.data as Array<{ name: string; description?: string; mode: string; native?: boolean; hidden?: boolean }>;
-    return agents
+    return result.data
       .filter((a) => !a.hidden)
       .map((a) => ({
         name: a.name,
